@@ -88,7 +88,6 @@ option(GRAPHICS_DISABLED "Disable disable graphics (ScrollView)" OFF)
 option(DISABLED_LEGACY_ENGINE "Disable the legacy OCR engine" OFF)
 option(ENABLE_LTO "Enable link-time optimization" OFF)
 option(FAST_FLOAT "Enable float for LSTM" ON)
-option(ENABLE_OPENCL "Enable unsupported experimental OpenCL support" OFF)
 option(ENABLE_NATIVE
        "Enable optimization for host CPU (could break HW compatibility)" OFF)
 # see
@@ -283,7 +282,7 @@ endif()
 # Compiler specific environment
 if(CMAKE_COMPILER_IS_GNUCXX OR MINGW)
   set(CMAKE_CXX_FLAGS_DEBUG
-      "${CMAKE_CXX_FLAGS_DEBUG} -Wall -DDEBUG -pedantic -Og")
+      "${CMAKE_CXX_FLAGS_DEBUG} -Wall -DDEBUG -pedantic -Og -Wno-unknown-pragmas")
 elseif(MSVC)
   add_definitions(-D_CRT_SECURE_NO_WARNINGS)
   add_definitions(-D_CRT_NONSTDC_NO_DEPRECATE) # strdup
@@ -307,6 +306,10 @@ elseif(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     message(STATUS "Building with static CRT.")
   endif()
+  # Workaround: When building on VS 2022 17.10 or newer, but using an older runtime,
+  # mutexes can crash
+  # https://stackoverflow.com/questions/78598141/first-stdmutexlock-crashes-in-application-built-with-latest-visual-studio
+  add_definitions(-D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
 endif()
 if(CLANG) # clang all platforms
   set(CMAKE_CXX_FLAGS_RELEASE
@@ -321,7 +324,10 @@ if(OPENMP_BUILD
   set(OPENMP_BUILD OFF)
 endif()
 if(OPENMP_BUILD)
-  find_package(OpenMP QUIET)
+  if(MSVC)  # supported from cmake 3.30
+    set(OpenMP_RUNTIME_MSVC "llvm")
+  endif(MSVC)
+  find_package(OpenMP)
   # https://stackoverflow.com/questions/12399422
   # how-to-set-linker-flags-for-openmp-in-cmakes-try-compile-function
   if(NOT OpenMP_FOUND
@@ -460,18 +466,6 @@ else()
   endif(DISABLE_CURL)
 endif()
 
-if(ENABLE_OPENCL)
-  find_package(OpenCL)
-  if(OpenCL_FOUND)
-    include_directories(${OpenCL_INCLUDE_DIRS})
-    message(STATUS "OpenCL_INCLUDE_DIRS: ${OpenCL_INCLUDE_DIRS}")
-    message(STATUS "OpenCL_LIBRARY: ${OpenCL_LIBRARY}")
-    set(USE_OPENCL ON)
-  else()
-    set(USE_OPENCL OFF)
-  endif(OpenCL_FOUND)
-endif(ENABLE_OPENCL)
-
 # ##############################################################################
 #
 # configure
@@ -484,9 +478,7 @@ else()
   set(DOTPRODUCT_FLAGS "${DOTPRODUCT_FLAGS} -O3 -ffast-math")
 endif()
 
-if(NOT DEFINED CMAKE_INSTALL_LIBDIR)
-  set(CMAKE_INSTALL_LIBDIR lib)
-endif(NOT DEFINED CMAKE_INSTALL_LIBDIR)
+include (GNUInstallDirs)
 
 set(AUTOCONFIG_SRC ${CMAKE_CURRENT_BINARY_DIR}/config_auto.h.in)
 set(AUTOCONFIG ${CMAKE_CURRENT_BINARY_DIR}/config_auto.h)
@@ -497,13 +489,13 @@ if(GRAPHICS_DISABLED)
 endif()
 set(CMAKE_REQUIRED_INCLUDES
     ${CMAKE_REQUIRED_INCLUDES} "${CMAKE_PREFIX_PATH}/include"
-    "${CMAKE_INSTALL_PREFIX}/include")
+    ${CMAKE_INSTALL_INCLUDEDIR})
 include(Configure)
 
 configure_file(${AUTOCONFIG_SRC} ${AUTOCONFIG} @ONLY)
 
-set(INCLUDE_DIR "${CMAKE_INSTALL_PREFIX}/include")
-set(LIBRARY_DIRS "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
+set(INCLUDE_DIR ${CMAKE_INSTALL_INCLUDEDIR})
+set(LIBRARY_DIRS ${CMAKE_INSTALL_LIBDIR})
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/include/tesseract/version.h.in
                ${CMAKE_CURRENT_BINARY_DIR}/include/tesseract/version.h @ONLY)
@@ -534,6 +526,7 @@ message(STATUS "General configuration for Tesseract ${PACKAGE_VERSION}")
 message(STATUS "--------------------------------------------------------")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE} ${BUILD_ARCH}")
 message(STATUS "Compiler: ${CMAKE_CXX_COMPILER_ID}")
+message(STATUS "Compiler version: ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "Used standard: C++${CMAKE_CXX_STANDARD}")
 message(STATUS "CXX compiler options: ${COMPILER_FLAGS}")
 get_directory_property(DirCompDefs COMPILE_DEFINITIONS)
@@ -565,11 +558,6 @@ message(STATUS "Disable the legacy OCR engine [DISABLED_LEGACY_ENGINE]: "
 message(STATUS "Build training tools [BUILD_TRAINING_TOOLS]: "
                "${BUILD_TRAINING_TOOLS}")
 message(STATUS "Build tests [BUILD_TESTS]: ${BUILD_TESTS}")
-if(ENABLE_OPENCL)
-  message(
-    STATUS
-      "Enable unsupported experimental OpenCL [ENABLE_OPENCL]: ${USE_OPENCL}")
-endif(ENABLE_OPENCL)
 message(STATUS "Use system ICU Library [USE_SYSTEM_ICU]: ${USE_SYSTEM_ICU}")
 message(
   STATUS "Install tesseract configs [INSTALL_CONFIGS]: ${INSTALL_CONFIGS}")
@@ -608,7 +596,6 @@ file(
   src/cutil/*.cpp
   src/dict/*.cpp
   src/lstm/*.cpp
-  src/opencl/*.cpp
   src/textord/*.cpp
   src/viewer/*.cpp
   src/wordrec/*.cpp)
@@ -749,7 +736,6 @@ file(
   src/cutil/*.h
   src/dict/*.h
   src/lstm/*.h
-  src/opencl/*.h
   src/textord/*.h
   src/viewer/*.h
   src/wordrec/*.h)
@@ -760,6 +746,7 @@ set(TESSERACT_SRC
     src/api/capi.cpp
     src/api/renderer.cpp
     src/api/altorenderer.cpp
+    src/api/pagerenderer.cpp
     src/api/hocrrenderer.cpp
     src/api/lstmboxrenderer.cpp
     src/api/pdfrenderer.cpp
@@ -784,6 +771,7 @@ set(TESSERACT_CONFIGS
     tessdata/configs/lstmbox
     tessdata/configs/lstmdebug
     tessdata/configs/makebox
+    tessdata/configs/page
     tessdata/configs/pdf
     tessdata/configs/quiet
     tessdata/configs/rebox
@@ -816,7 +804,6 @@ target_include_directories(
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/cutil>
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/dict>
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/lstm>
-         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/opencl>
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/textord>
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/viewer>
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/wordrec>
@@ -831,9 +818,6 @@ endif()
 target_link_libraries(libtesseract PRIVATE ${LIB_Ws2_32} ${LIB_pthread})
 if(OpenMP_CXX_FOUND)
   target_link_libraries(libtesseract PUBLIC OpenMP::OpenMP_CXX)
-endif()
-if(OpenCL_FOUND)
-  target_link_libraries(libtesseract PUBLIC OpenCL::OpenCL)
 endif()
 if(LibArchive_FOUND)
   target_link_libraries(libtesseract PUBLIC ${LibArchive_LIBRARIES})
@@ -851,7 +835,7 @@ set_target_properties(
                           ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH})
 set_target_properties(
   libtesseract PROPERTIES SOVERSION
-                          ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH})
+                          ${VERSION_MAJOR}.${VERSION_MINOR})
 
 set_target_properties(
   libtesseract
@@ -915,7 +899,9 @@ if(BUILD_TESTS
    AND EXISTS
        ${CMAKE_CURRENT_SOURCE_DIR}/unittest/third_party/googletest/CMakeLists.txt
 )
+  enable_testing()
   add_subdirectory(unittest/third_party/googletest)
+  add_subdirectory(unittest)
 endif()
 
 if(BUILD_TRAINING_TOOLS)
@@ -949,12 +935,19 @@ install(
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
   RENAME tesseract.pc)
 install(TARGETS tesseract DESTINATION bin)
+if (MSVC)
+  install(FILES $<TARGET_PDB_FILE:${PROJECT_NAME}> DESTINATION bin OPTIONAL)
+endif()
 install(
   TARGETS libtesseract
   EXPORT TesseractTargets
   RUNTIME DESTINATION bin
+  RUNTIME DESTINATION bin
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+if (MSVC AND BUILD_SHARED_LIBS)
+  install(FILES $<TARGET_PDB_FILE:libtesseract> DESTINATION bin OPTIONAL)
+endif()
 install(
   EXPORT TesseractTargets
   NAMESPACE Tesseract::
@@ -980,9 +973,9 @@ install(
 
 if(INSTALL_CONFIGS)
   install(FILES ${TESSERACT_CONFIGS}
-          DESTINATION ${CMAKE_INSTALL_PREFIX}/share/tessdata/configs)
+          DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/tessdata/configs)
   install(FILES ${TESSERACT_TESSCONFIGS}
-          DESTINATION ${CMAKE_INSTALL_PREFIX}/share/tessdata/tessconfigs)
+          DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/tessdata/tessconfigs)
 endif()
 
 # ##############################################################################

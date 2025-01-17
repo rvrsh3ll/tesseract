@@ -87,15 +87,6 @@ public:
   static const char *Version();
 
   /**
-   * If compiled with OpenCL AND an available OpenCL
-   * device is deemed faster than serial code, then
-   * "device" is populated with the cl_device_id
-   * and returns sizeof(cl_device_id)
-   * otherwise *device=nullptr and returns 0.
-   */
-  static size_t getOpenCLDevice(void **device);
-
-  /**
    * Set the name of the input file. Needed for training and
    * reading a UNLV zone file, and for searchable PDF output.
    */
@@ -347,6 +338,11 @@ public:
   Pix *GetThresholdedImage();
 
   /**
+   * Return average gradient of lines on page.
+   */
+  float GetGradient();
+
+  /**
    * Get the result of page layout analysis as a leptonica-style
    * Boxa, Pixa pair, in reading order.
    * Can be called before or after Recognize.
@@ -558,6 +554,18 @@ public:
    * data structures.
    */
   char *GetAltoText(int page_number);
+
+   /**
+   * Make an XML-formatted string with PAGE markup from the internal
+   * data structures.
+   */
+  char *GetPAGEText(ETEXT_DESC *monitor, int page_number);
+
+  /**
+   * Make an XML-formatted string with PAGE markup from the internal
+   * data structures.
+   */
+  char *GetPAGEText(int page_number);
 
   /**
    * Make a TSV-formatted string from the internal data structures.
